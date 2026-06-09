@@ -1,54 +1,74 @@
-import React from 'react';
-import { GoogleMap, DirectionsRenderer, Marker } from '@react-google-maps/api';
+import React, { useEffect } from 'react';
+import { MapContainer as LeafletMap, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 
-const containerStyle = {
-  width: '100%',
-  height: '100%'
-};
+// Fix for default marker icon in Leaflet + Webpack/Vite
+import markerIcon from 'leaflet/dist/images/marker-icon.png';
+import markerShadow from 'leaflet/dist/images/marker-shadow.png';
 
-const center = {
-  lat: 12.9716,
-  lng: 77.5946
-};
+const DefaultIcon = L.icon({
+  iconUrl: markerIcon,
+  shadowUrl: markerShadow,
+  iconSize: [25, 41],
+  iconAnchor: [12, 41]
+});
+
+L.Marker.prototype.options.icon = DefaultIcon;
+
+const center: [number, number] = [12.9716, 77.5946];
 
 interface MapContainerProps {
-  directions: google.maps.DirectionsResult | null;
-  currentPosition: google.maps.LatLngLiteral | null;
+  route: [number, number][] | null;
+  currentPosition: [number, number] | null;
+  originCoords: [number, number] | null;
+  destinationCoords: [number, number] | null;
 }
 
-const MapContainer: React.FC<MapContainerProps> = ({ directions, currentPosition }) => {
+const ChangeView = ({ center }: { center: [number, number] }) => {
+  const map = useMap();
+  useEffect(() => {
+    map.setView(center);
+  }, [center, map]);
+  return null;
+};
+
+const MapContainer: React.FC<MapContainerProps> = ({ route, currentPosition, originCoords, destinationCoords }) => {
   return (
-    <GoogleMap
-      mapContainerStyle={containerStyle}
+    <LeafletMap
       center={currentPosition || center}
       zoom={12}
-      options={{
-        zoomControl: true,
-        streetViewControl: false,
-        mapTypeControl: false,
-        fullscreenControl: false,
-      }}
+      style={{ width: '100%', height: '100%' }}
     >
-      {directions && (
-        <DirectionsRenderer
-          directions={directions}
-          options={{
-            polylineOptions: {
-              strokeColor: '#1a73e8',
-              strokeWeight: 5,
-            },
-          }}
-        />
-      )}
+      <TileLayer
+        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+      />
       {currentPosition && (
-        <Marker
-          position={currentPosition}
-          icon={{
-            url: 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png',
-          }}
+        <>
+          <ChangeView center={currentPosition} />
+          <Marker position={currentPosition}>
+            <Popup>Your current location</Popup>
+          </Marker>
+        </>
+      )}
+      {originCoords && (
+        <Marker position={originCoords}>
+          <Popup>Source</Popup>
+        </Marker>
+      )}
+      {destinationCoords && (
+        <Marker position={destinationCoords}>
+          <Popup>Destination</Popup>
+        </Marker>
+      )}
+      {route && route.length > 0 && (
+        <Polyline
+          pathOptions={{ color: '#3b82f6', weight: 6, opacity: 0.8 }}
+          positions={route}
         />
       )}
-    </GoogleMap>
+    </LeafletMap>
   );
 };
 

@@ -1,92 +1,107 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
-import { useJsApiLoader, Autocomplete } from '@react-google-maps/api';
+import { useState, useCallback, useEffect } from 'react';
 import MapContainer from './components/MapContainer';
 import './App.css';
 
-type Library = "places" | "drawing" | "geometry" | "visualization";
-const libraries: Library[] = ["places"];
+interface RouteInfo {
+  distance: string;
+  duration: string;
+}
 
 function App() {
-  const { isLoaded } = useJsApiLoader({
-    googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '',
-    libraries,
-  });
+  const [originQuery, setOriginQuery] = useState('');
+  const [destinationQuery, setDestinationQuery] = useState('');
+  const [originCoords, setOriginCoords] = useState<[number, number] | null>(null);
+  const [destinationCoords, setDestinationCoords] = useState<[number, number] | null>(null);
+  const [route, setRoute] = useState<[number, number][] | null>(null);
+  const [currentPosition, setCurrentPosition] = useState<[number, number] | null>(null);
+  const [routeInfo, setRouteInfo] = useState<RouteInfo | null>(null);
+  const [isSearching, setIsSearching] = useState(false);
 
-  const [origin, setOrigin] = useState<string>('');
-  const [destination, setDestination] = useState<string>('');
-  const [directions, setDirections] = useState<google.maps.DirectionsResult | null>(null);
-  const [currentPosition, setCurrentPosition] = useState<google.maps.LatLngLiteral | null>(null);
-
-  const originRef = useRef<google.maps.places.Autocomplete | null>(null);
-  const destinationRef = useRef<google.maps.places.Autocomplete | null>(null);
-
-  const onOriginLoad = (autocomplete: google.maps.places.Autocomplete) => {
-    originRef.current = autocomplete;
-  };
-
-  const onDestinationLoad = (autocomplete: google.maps.places.Autocomplete) => {
-    destinationRef.current = autocomplete;
+  const searchLocation = async (query: string) => {
+    if (!query) return null;
+    const response = await fetch(
+      `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
+        query + ', Bengaluru'
+      )}&viewbox=77.3,12.7,77.9,13.2&bounded=1&limit=1`
+    );
+    const data = await response.json();
+    if (data && data.length > 0) {
+      return {
+        lat: parseFloat(data[0].lat),
+        lon: parseFloat(data[0].lon),
+        display_name: data[0].display_name,
+      };
+    }
+    return null;
   };
 
   const calculateRoute = useCallback(async () => {
-    if (!origin || !destination) return;
+    let startPoint: [number, number] | null = null;
+    let endPoint: [number, number] | null = null;
 
-    const directionsService = new google.maps.DirectionsService();
+    // Determine Start Point
+    if (originQuery === 'My Current Location' && currentPosition) {
+      startPoint = currentPosition;
+    } else if (originQuery) {
+      const loc = await searchLocation(originQuery);
+      if (loc) startPoint = [loc.lat, loc.lon];
+    }
 
-    const originLocation = (origin === "My Current Location" && currentPosition)
-      ? currentPosition
-      : origin;
+    // Determine End Point
+    if (destinationQuery) {
+      const loc = await searchLocation(destinationQuery);
+      if (loc) endPoint = [loc.lat, loc.lon];
+    }
 
+    if (!startPoint || !endPoint) {
+      alert('Please enter valid origin and destination in Bengaluru.');
+      return;
+    }
+
+    setOriginCoords(startPoint);
+    setDestinationCoords(endPoint);
+
+    setIsSearching(true);
     try {
-      const result = await directionsService.route({
-        origin: originLocation,
-        destination: destination,
-        travelMode: google.maps.TravelMode.DRIVING,
-        provideRouteAlternatives: true,
-      });
+      const response = await fetch(
+        `https://router.project-osrm.org/route/v1/driving/${startPoint[1]},${startPoint[0]};${endPoint[1]},${endPoint[0]}?overview=full&geometries=geojson&alternatives=true`
+      );
+      const data = await response.json();
 
-      // Find the shortest route based on distance
-      if (result.routes && result.routes.length > 0) {
-        let shortestRouteIndex = 0;
-        let minDistance = result.routes[0].legs[0].distance?.value || Infinity;
-
-        for (let i = 1; i < result.routes.length; i++) {
-          const distance = result.routes[i].legs[0].distance?.value || Infinity;
-          if (distance < minDistance) {
-            minDistance = distance;
-            shortestRouteIndex = i;
+      if (data.code === 'Ok' && data.routes.length > 0) {
+        // Find shortest route
+        let shortestRoute = data.routes[0];
+        for (let i = 1; i < data.routes.length; i++) {
+          if (data.routes[i].distance < shortestRoute.distance) {
+            shortestRoute = data.routes[i];
           }
         }
 
-        // We can't easily reorder the routes in DirectionsResult to make DirectionsRenderer pick it
-        // but we can create a new result object with only the shortest route.
-        const shortestResult = {
-          ...result,
-          routes: [result.routes[shortestRouteIndex]]
-        };
-
-        setDirections(shortestResult);
+        const coordinates = shortestRoute.geometry.coordinates.map(
+          (coord: [number, number]) => [coord[1], coord[0]] as [number, number]
+        );
+        setRoute(coordinates);
+        setRouteInfo({
+          distance: (shortestRoute.distance / 1000).toFixed(2) + ' km',
+          duration: (shortestRoute.duration / 60).toFixed(0) + ' min',
+        });
       }
     } catch (error) {
-      console.error("Error calculating route:", error);
-      alert("Could not calculate route. Please try different locations.");
+      console.error('Error fetching route:', error);
+      alert('Could not find a route.');
+    } finally {
+      setIsSearching(false);
     }
-  }, [origin, destination, currentPosition]);
+  }, [originQuery, destinationQuery, currentPosition]);
 
   useEffect(() => {
     let watchId: number;
     if (navigator.geolocation) {
       watchId = navigator.geolocation.watchPosition(
         (position) => {
-          const pos = {
-            lat: position.coords.latitude,
-            lng: position.coords.longitude,
-          };
-          setCurrentPosition(pos);
+          setCurrentPosition([position.coords.latitude, position.coords.longitude]);
         },
-        (error) => {
-          console.error("Error watching position:", error);
-        },
+        (error) => console.error(error),
         { enableHighAccuracy: true }
       );
     }
@@ -97,71 +112,57 @@ function App() {
 
   const handleMyLocation = () => {
     if (currentPosition) {
-      setOrigin("My Current Location");
-    } else if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          const pos = {
-            lat: position.coords.latitude,
-            lng: position.coords.longitude,
-          };
-          setCurrentPosition(pos);
-          setOrigin("My Current Location");
-        },
-        () => {
-          alert("Error: The Geolocation service failed.");
-        }
-      );
+      setOriginQuery('My Current Location');
+      setOriginCoords(currentPosition);
     } else {
-      alert("Error: Your browser doesn't support geolocation.");
+      alert('Fetching your location...');
     }
   };
-
-  if (!isLoaded) return <div>Loading...</div>;
 
   return (
     <div className="app-container">
       <div className="search-panel">
-        <h1>Bengaluru Navigator</h1>
+        <h1>Bengaluru Navigator (OSM)</h1>
         <div className="input-group">
-          <Autocomplete
-            onLoad={onOriginLoad}
-            onPlaceChanged={() => setOrigin(originRef.current?.getPlace().formatted_address || '')}
-            options={{ componentRestrictions: { country: 'IN' } }}
-          >
-            <input
-              type="text"
-              placeholder="Enter Origin (e.g. Majestic)"
-              value={origin}
-              onChange={(e) => setOrigin(e.target.value)}
-            />
-          </Autocomplete>
-          <Autocomplete
-            onLoad={onDestinationLoad}
-            onPlaceChanged={() => setDestination(destinationRef.current?.getPlace().formatted_address || '')}
-            options={{ componentRestrictions: { country: 'IN' } }}
-          >
-            <input
-              type="text"
-              placeholder="Enter Destination (e.g. Whitefield)"
-              value={destination}
-              onChange={(e) => setDestination(e.target.value)}
-            />
-          </Autocomplete>
+          <input
+            type="text"
+            placeholder="Enter Origin (e.g. Majestic)"
+            value={originQuery}
+            onChange={(e) => {
+              setOriginQuery(e.target.value);
+              setOriginCoords(null);
+            }}
+          />
+          <input
+            type="text"
+            placeholder="Enter Destination (e.g. Whitefield)"
+            value={destinationQuery}
+            onChange={(e) => {
+              setDestinationQuery(e.target.value);
+              setDestinationCoords(null);
+            }}
+          />
         </div>
         <div className="button-group">
-          <button onClick={calculateRoute}>Find Shortest Path</button>
+          <button onClick={calculateRoute} disabled={isSearching}>
+            {isSearching ? 'Searching...' : 'Find Shortest Path'}
+          </button>
           <button onClick={handleMyLocation}>My Location</button>
         </div>
-        {directions && directions.routes[0] && (
+        {routeInfo && (
           <div className="route-info">
-            <p>Distance: {directions.routes[0].legs[0].distance?.text}</p>
-            <p>Duration: {directions.routes[0].legs[0].duration?.text}</p>
+            <p>Distance: {routeInfo.distance}</p>
+            <p>Duration: {routeInfo.duration}</p>
           </div>
         )}
       </div>
       <div className="map-panel">
-        <MapContainer directions={directions} currentPosition={currentPosition} />
+        <MapContainer
+          route={route}
+          currentPosition={currentPosition}
+          originCoords={originCoords}
+          destinationCoords={destinationCoords}
+        />
       </div>
     </div>
   );
